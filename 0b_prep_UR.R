@@ -31,11 +31,11 @@ library(stringdist)
 library(openxlsx)
 
 # settings
-country <- "Liberia"
-country_code <- "LBR"
-frame.year <- 2008
-beg.year <- 2000
-end.year <- 2020
+settings <- yaml::read_yaml("run_settings.yaml")
+list2env(settings, .GlobalEnv)
+frame.year <- frame_year
+beg.year <- year_start_estimation
+end.year <- year_end_estimation
 
 
 # Shapefiles --------------------------------------------------------------
@@ -43,11 +43,11 @@ end.year <- 2020
 gadm.abbrev <- country_code
 
 poly.path <- paste0("Data/", country, "/shapeFiles_gadm") # specify the folder of the country shape files
-poly.layer.adm0 <- paste('gadm36', gadm.abbrev,
+poly.layer.adm0 <- paste(gadmFolder,
                          '0', sep = "_") # specify the name of the national shape file
-poly.layer.adm1 <- paste('gadm36', gadm.abbrev,
+poly.layer.adm1 <- paste(gadmFolder,
                          '1', sep = "_") # specify the name of the admin1 shape file
-poly.layer.adm2 <- paste('gadm36', gadm.abbrev,
+poly.layer.adm2 <- paste(gadmFolder,
                          '2', sep = "_") # specify the name of the admin2 shape file
 
 poly.adm0 <- readOGR(dsn = poly.path,
@@ -82,6 +82,7 @@ census.year <- frame.year
 
 file <- paste0( pop.abbrev,'_ppp_',census.year,'_1km_Aggregated_UNadj.tif')
 pop_dir <- paste0("Data/", country, "/Population")
+if (!dir.exists(pop_dir)) dir.create(pop_dir)
 
 if(!file.exists(paste0(pop_dir, "/", file))){
   
@@ -89,14 +90,12 @@ if(!file.exists(paste0(pop_dir, "/", file))){
                 census.year, "/", toupper(pop.abbrev),"/",      
                 pop.abbrev,'_ppp_',census.year,'_1km_Aggregated_UNadj.tif')
   
-  download.file(url, file, method = "libcurl",mode="wb")
+  download.file(url, paste0(pop_dir, "/", file),
+                method = "libcurl", mode= "wb")
 }
 
 # UNadjusted population counts
-worldpop <- raster(paste0(pop_dir, "/",
-                          tolower(gadm.abbrev),
-                          '_ppp_',frame.year,
-                          '_1km_Aggregated_UNadj.tif',sep=''))
+worldpop <- raster(paste0(pop_dir, "/", file))
 
 
 # Load cluster data -------------------------------------------------------

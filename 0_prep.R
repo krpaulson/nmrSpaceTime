@@ -12,28 +12,35 @@ source("helperFunctions.R")
 
 # Settings ----------------------------------------------------------------
 
-countries <- "Liberia"
-country_codes <- "LBR"
-year_start_country <- 2013 # first year's survey to include for this country, so that we only use 1 sampling frame
-year_start <- 2000
-year_end <- 2020
+settings <- yaml::read_yaml("run_settings.yaml")
+list2env(settings, .GlobalEnv)
 
-## Fill in your email and DHS project name if not yet configured
-# set_rdhs_config(
-#   email = EMAIL,
-#   project = PROJECT_NAME
-# )
+if (!dir.exists("Data")) dir.create("Data")
+if (!dir.exists(paste0("Data/", country))) dir.create(paste0("Data/", country))
+
+file.copy("run_settings.yaml", paste0("Data/", country, "/run_settings.yaml"))
+
+
+# GADM --------------------------------------------------------------------
+
+if (!dir.exists(paste0("Data/", country, "/shapeFiles_gadm"))) {
+  download.file(paste0("https://geodata.ucdavis.edu/gadm/gadm4.0/shp/",
+                       gadmFolder, "_shp.zip"),
+                destfile = paste0("Data/", country, "/shapeFiles_gadm.zip"))
+  unzip(paste0("Data/", country, "/shapeFiles_gadm.zip"),
+        exdir = paste0("Data/", country, "/shapeFiles_gadm"))
+}
 
 
 # DHS data ----------------------------------------------------------------
 
-# get country IDs
+# get country ID
 ids <- dhs_countries(returnFields=c("CountryName", "DHS_CountryCode"))
-ids <- ids %>% filter(CountryName %in% countries)
+ids <- ids %>% filter(CountryName == country)
 
 # find all the surveys that fit our search criteria
 survs <- dhs_surveys(countryIds = ids$DHS_CountryCode,
-                     surveyYearStart = year_start)
+                     surveyYearStart = year_start_survey)
 
 # find datasets from these surveys
 datasets <- dhs_datasets(surveyIds = survs$SurveyId)
@@ -54,19 +61,15 @@ datasets_wide <- datasets %>%
 datasets <- datasets %>% filter(SurveyId %in% datasets_wide$SurveyId)
 
 # save metadata
-saveRDS(datasets_wide, file = "Data/metadata.rds")
+saveRDS(datasets_wide, file = paste0("Data/", country, "/metadata.rds"))
 
 # download
-downloads <- get_datasets(datasets$file_name, output_dir_root = "Data")
+downloads <- get_datasets(datasets$file_name,
+                          output_dir_root = paste0("Data/", country),
+                          clear_cache = T)
 
 ## NOTE: can start from here if data are already downloaded
-
-# get survey metadata and subset to those using most-recent sampling frame
-survey_meta <- readRDS("Data/metadata.rds")
-survey_subset <- data.frame(country = countries, yr = year_start_country)
-survey_meta <- survey_meta %>%
-  right_join(survey_subset, by = "country") %>%
-  filter(survey_year >= yr)
+survey_meta <- readRDS(paste0("Data/", country, "/metadata.rds"))
 
 # loop through survey location-year and load data
 mod_dat <- data.frame()
@@ -75,7 +78,7 @@ for (i in 1:nrow(survey_meta)) {
   print(paste(survey_meta[i,]$country, survey_meta[i,]$survey_year))
   
   # get survey data and format with SUMMER::get_births
-  data.raw <- readRDS(paste0("Data/", survey_meta$Survey[i], ".rds"))
+  data.raw <- readRDS(paste0("Data/", country, "/", survey_meta$Survey[i], ".rds"))
   
   # make sure alive variable is coded correctly for getBirths
   alive <- attr(data.raw$b5, which = "labels")
@@ -83,10 +86,10 @@ for (i in 1:nrow(survey_meta)) {
   data.raw$b5 <- ifelse(data.raw$b5 == alive["yes"][[1]], "yes", "no")
   data.raw$b5 <- factor(data.raw$b5, levels = c("yes", "no"))
   
-  data <- suppressMessages(getBirths(
+  data <- suppressMessages(SUMMER::getBirths(
     data = data.raw,
     surveyyear = as.numeric(survey_meta$survey_year[i]),
-    year.cut = seq(year_start, as.numeric(survey_meta$survey_year[i]) + 1, 1),
+    year.cut = seq(year_start_estimation, as.numeric(survey_meta$survey_year[i]) + 1, 1),
     strata = "v022",
     compact = F
   ))
@@ -95,7 +98,7 @@ for (i in 1:nrow(survey_meta)) {
   data <- data[data$age == "0", ]
   
   # get GPS data if it exists, and use it to merge on location metadata
-  gps_file <- paste0("Data/", survey_meta$GPS[i], ".rds")
+  gps_file <- paste0("Data/", country, "/", survey_meta$GPS[i], ".rds")
   if (file.exists(gps_file)) {
     
     gps <- readRDS(gps_file)
@@ -127,6 +130,6 @@ mod_dat <- mod_dat %>%
   rename(cluster = v001, years = time, urban = v025, Y = died)
 
 # save
-saveRDS(mod_dat, file = paste0("Data/", countries, "/nmr_data_prepped.rds"))
+saveRDS(mod_dat, file = paste0("Data/", country, "/nmr_data_prepped.rds"))
 
 
