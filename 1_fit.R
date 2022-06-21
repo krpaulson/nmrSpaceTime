@@ -8,15 +8,20 @@ library(spdep)
 library(stringr)
 library(openxlsx)
 
+set.seed(1528)
+
 
 # settings ----------------------------------------------------------------
 
-country <- "Liberia"
-country_code <- "LBR"
-years <- c(2000:2020)
+settings <- yaml::read_yaml("run_settings.yaml")
+list2env(settings, .GlobalEnv)
 
-hold_out_years <- c(2009:2011)
-hold_out_area <- 15
+years <- c(year_start_estimation:year_end_estimation)
+
+survey_meta <- readRDS(paste0("Data/", country, "/metadata.rds"))
+hold_out_year_start <- max(survey_meta$survey_year) - 3
+hold_out_years <- c(hold_out_year_start:2020)
+# hold_out_area <- 1
 
 
 # setup -------------------------------------------------------------------
@@ -43,7 +48,7 @@ mod.dat <- readRDS(paste0("Data/", country, "/nmr_data_prepped.rds"))
 start.year <- min(years)
 mod.dat <- mod.dat %>%
   mutate(year = as.numeric(as.character(years))) %>% 
-  filter(year >= start.year)
+  filter(year >= start.year & year >= survey_year - 10)
 if (is.numeric(mod.dat$urban)) {
   mod.dat$urban_indicator <- as.numeric(mod.dat$urban == 1)
   mod.dat$rural_indicator <- as.numeric(mod.dat$urban == 2)
@@ -197,110 +202,120 @@ formulas[["ar1_iv"]] <-
     extraconstr = constr.st,
     rankdef = nrow(icar_prec) + S - 1)
 
-# apply holdouts for validation
-binom_df_holdouts <- binom_df
-binom_df_holdouts[binom_df_holdouts$year %in% hold_out_years |
-                    binom_df_holdouts$admin1 %in% hold_out_area, ]$Y <- NA
 
-# fit all models
-for (time_model in time_model_list) {
-  print(time_model)
-  results[[time_model]] <- inla(
-    formula = formulas[[time_model]],
-    Ntrials = N,
-    data = binom_df_holdouts,
-    family = "betabinomial",
-    control.predictor = list(compute = TRUE),
-    control.compute = list(return.marginals = TRUE,
-                           config = TRUE,
-                           return.marginals.predictor = TRUE))
-}
+for (hold_out_area in 1:length(unique(binom_df$admin1))) {
+  print(hold_out_area)
 
-
-# Samples -----------------------------------------------------------------
-
-expit_medians <- list()
-
-for (time_model in time_model_list) {
+  # apply holdouts for validation
+  binom_df_holdouts <- binom_df
+  binom_df_holdouts[binom_df_holdouts$year %in% hold_out_years |
+                      binom_df_holdouts$admin1 %in% hold_out_area, ]$Y <- NA
   
-  print(time_model)
-  
-  result <- results[[time_model]]
-  
-  # obtain posterior samples
-  nsamp <- 1000
-  samp <- inla.posterior.sample(n = nsamp, result = result)
-  
-  # set up matrices to contain posterior samples for each term in our linear predictor
-  # which we will later need to combine
-  # only take the first half of the region id's since the bym2 returns c(total, spatial)
-  region_idx <- which(rownames(samp[[1]]$latent) %>%
-                        str_detect("admin1"))[1:length(unique(binom_df$admin1))]
-  yearx <- which(rownames(samp[[1]]$latent) %>% str_detect("^year"))
-  ayx <- which(rownames(samp[[1]]$latent) %>% str_detect("spacetime.unstruct")) # interaction
-  
-  # urban intercept
-  urbanx <- which(rownames(samp[[1]]$latent) %>% str_detect("urban"))
-  ruralx <- which(rownames(samp[[1]]$latent) %>% str_detect("rural"))
-  
-  region_mat <- matrix(0, nrow = length(region_idx), ncol = nsamp)
-  year_mat <- matrix(0, nrow = length(yearx), ncol = nsamp)
-  ay_mat <- matrix(0, nrow = length(ayx), ncol = nsamp)
-  urban_mat <- matrix(0, nrow = 1, ncol = nsamp)
-  rural_mat <- matrix(0, nrow = 1, ncol = nsamp)
-  
-  # fill in matrix with posterior samples
-  for (i in 1:nsamp) {
-    region_mat[,i] <- samp[[i]]$latent[region_idx]
-    year_mat[,i] <- samp[[i]]$latent[yearx]
-    ay_mat[,i] <- samp[[i]]$latent[ayx]
-    urban_mat[,i] <- samp[[i]]$latent[urbanx]
-    rural_mat[,i] <- samp[[i]]$latent[ruralx]
+  # fit all models
+  for (time_model in time_model_list) {
+    print(time_model)
+    results[[time_model]] <- inla(
+      formula = formulas[[time_model]],
+      Ntrials = N,
+      data = binom_df_holdouts,
+      family = "betabinomial",
+      control.predictor = list(compute = TRUE),
+      control.compute = list(return.marginals = TRUE,
+                             config = TRUE,
+                             return.marginals.predictor = TRUE))
   }
   
-  # create space-time grid
-  st_df <- expand.grid(region = 1:nrow(region_mat),
-                       time = 1:nrow(year_mat)) %>%
-    arrange(region, time)
   
-  # prediction
-  samp_mat_urban <-
-    urban_mat[rep(1, nrow(ay_mat)),] +  # urban intercept
-    region_mat[st_df$region,] +         # space effect
-    year_mat[st_df$time,] +             # time effect
-    ay_mat                              # space-time interaction
-  samp_mat_rural <-
-    rural_mat[rep(1, nrow(ay_mat)),] +  # rural intercept
-    region_mat[st_df$region,] +         # space effect
-    year_mat[st_df$time,] +             # time effect
-    ay_mat                              # space-time interaction
+  # Samples -----------------------------------------------------------------
   
-  # now expit all of our samples to get back to p
-  expit_samp_mat_urban <- SUMMER::expit(samp_mat_urban)
-  expit_samp_mat_rural <- SUMMER::expit(samp_mat_rural)
+  expit_medians <- list()
   
-  # use urban proportions to aggregate
-  expit_samp_mat <-
-    urb_prop$urban * expit_samp_mat_urban +
-    urb_prop$rural * expit_samp_mat_rural
+  for (time_model in time_model_list) {
+    
+    print(time_model)
+    
+    result <- results[[time_model]]
+    
+    # obtain posterior samples
+    nsamp <- 1000
+    samp <- inla.posterior.sample(n = nsamp, result = result)
+    
+    # set up matrices to contain posterior samples for each term in our linear predictor
+    # which we will later need to combine
+    # only take the first half of the region id's since the bym2 returns c(total, spatial)
+    region_idx <- which(rownames(samp[[1]]$latent) %>%
+                          str_detect("admin1"))[1:length(unique(binom_df$admin1))]
+    yearx <- which(rownames(samp[[1]]$latent) %>% str_detect("^year"))
+    ayx <- which(rownames(samp[[1]]$latent) %>% str_detect("spacetime.unstruct")) # interaction
+    
+    # urban intercept
+    urbanx <- which(rownames(samp[[1]]$latent) %>% str_detect("urban"))
+    ruralx <- which(rownames(samp[[1]]$latent) %>% str_detect("rural"))
+    
+    region_mat <- matrix(0, nrow = length(region_idx), ncol = nsamp)
+    year_mat <- matrix(0, nrow = length(yearx), ncol = nsamp)
+    ay_mat <- matrix(0, nrow = length(ayx), ncol = nsamp)
+    urban_mat <- matrix(0, nrow = 1, ncol = nsamp)
+    rural_mat <- matrix(0, nrow = 1, ncol = nsamp)
+    
+    # fill in matrix with posterior samples
+    for (i in 1:nsamp) {
+      region_mat[,i] <- samp[[i]]$latent[region_idx]
+      year_mat[,i] <- samp[[i]]$latent[yearx]
+      ay_mat[,i] <- samp[[i]]$latent[ayx]
+      urban_mat[,i] <- samp[[i]]$latent[urbanx]
+      rural_mat[,i] <- samp[[i]]$latent[ruralx]
+    }
+    
+    # create space-time grid
+    st_df <- expand.grid(region = 1:nrow(region_mat),
+                         time = 1:nrow(year_mat)) %>%
+      arrange(region, time)
+    
+    # prediction
+    samp_mat_urban <-
+      urban_mat[rep(1, nrow(ay_mat)),] +  # urban intercept
+      region_mat[st_df$region,] +         # space effect
+      year_mat[st_df$time,] +             # time effect
+      ay_mat                              # space-time interaction
+    samp_mat_rural <-
+      rural_mat[rep(1, nrow(ay_mat)),] +  # rural intercept
+      region_mat[st_df$region,] +         # space effect
+      year_mat[st_df$time,] +             # time effect
+      ay_mat                              # space-time interaction
+    
+    # now expit all of our samples to get back to p
+    expit_samp_mat_urban <- SUMMER::expit(samp_mat_urban)
+    expit_samp_mat_rural <- SUMMER::expit(samp_mat_rural)
+    
+    # use urban proportions to aggregate
+    expit_samp_mat <-
+      urb_prop$urban * expit_samp_mat_urban +
+      urb_prop$rural * expit_samp_mat_rural
+    
+    # convert back to logit for SD on prediction scale
+    # can use delta method later
+    logit_samp_mat <- SUMMER::logit(expit_samp_mat)
+    
+    # compile summaries
+    expit_medians[[time_model]] <- data.frame(
+      time_model = time_model,
+      nmr = apply(expit_samp_mat, 1, median),
+      nmr_lower = apply(expit_samp_mat, 1, quantile, 0.025),
+      nmr_upper = apply(expit_samp_mat, 1, quantile, 0.975),
+      logit_nmr_sd = apply(logit_samp_mat, 1, sd),
+      admin1_name = sort(unique(binom_df$admin1.name))[st_df$region],
+      year = sort(unique(binom_df$year))[st_df$time]
+    )
+    
+  }
   
-  # compile summaries
-  expit_medians[[time_model]] <- data.frame(
-    time_model = time_model,
-    nmr = apply(expit_samp_mat, 1, median),
-    nmr_lower = apply(expit_samp_mat, 1, quantile, 0.025),
-    nmr_upper = apply(expit_samp_mat, 1, quantile, 0.975),
-    admin1_name = sort(unique(binom_df$admin1.name))[st_df$region],
-    year = sort(unique(binom_df$year))[st_df$time]
-  )
+  expit_medians <- do.call("rbind", expit_medians)
   
+  # only save holdout
+  hold_out_area_name <- sort(unique(binom_df$admin1.name))[hold_out_area]
+  expit_medians <- expit_medians %>% filter(admin1_name == hold_out_area_name)
+  
+  saveRDS(expit_medians, paste0("Results/", country, "/results_holdout_", hold_out_area, ".rds"))
+
 }
-
-expit_medians <- do.call("rbind", expit_medians)
-
-# only save holdout
-hold_out_area_name <- sort(unique(binom_df$admin1.name))[hold_out_area]
-expit_medians <- expit_medians %>% filter(admin1_name == hold_out_area_name)
-
-saveRDS(expit_medians, paste0("Results/", country, "/results_holdout_", hold_out_area, ".rds"))
-
