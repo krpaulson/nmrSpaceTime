@@ -505,7 +505,7 @@ for ( t in 1:length(years)){
   
   # load U1 population at year t
   u1_pop<-raster(paste0("Data/", country, "/Population/",
-                        country.abbrev,'_u1_',year,'_1km.tif'))
+                        tolower(country_code),'_u1_',year,'_1km.tif'))
   
   # national urban fraction for U1 population at year t
   u1_natl <- sum(urb_grid$urb_ind*values(u1_pop),na.rm=TRUE)/
@@ -536,7 +536,7 @@ for ( t in 1:length(years)){
   
   # load U1 population at year t
   u1_pop<-raster(paste0("Data/", country, "/Population/",
-                        country.abbrev,'_u1_',year,'_1km.tif'))
+                        tolower(country_code),'_u1_',year,'_1km.tif'))
   
   # admin1 urban fraction for U1 population at year t
   u1_urb_admin1<-get_subnatl_frac(adm.names = admin1.names$GADM,
