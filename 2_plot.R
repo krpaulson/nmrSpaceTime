@@ -4,15 +4,20 @@
 library(tidyverse)
 library(magrittr)
 library(SUMMER)
+library(survey)
+library(RColorBrewer)
 
 
 # settings ----------------------------------------------------------------
 
-country <- "Liberia"
-country_code <- "LBR"
-years <- c(2000:2020)
+settings <- yaml::read_yaml("run_settings.yaml")
+list2env(settings, .GlobalEnv)
 
-hold_out_years <- c(2009:2011)
+years <- c(year_start_estimation:year_end_estimation)
+
+survey_meta <- readRDS(paste0("Data/", country, "/metadata.rds"))
+hold_out_year_start <- max(as.numeric(survey_meta$survey_year)) - 3
+hold_out_years <- c(hold_out_year_start:2020)
 
 
 # setup -------------------------------------------------------------------
@@ -28,107 +33,118 @@ poly_adm1 <- rgdal::readOGR(dsn = dsn, layer = layer)
 mod.dat <- readRDS(paste0("Data/", country, "/nmr_data_prepped.rds"))
 
 # load results
-
 results <- list.files(
   paste0("Results/", country),
   pattern = "results_holdout_",
   full.names = T
 ) %>% map_dfr(readRDS)
 
-results_all <- readRDS(paste0("Results/", country, "/results_all.rds"))
 
+# validation --------------------------------------------------------------
 
-# validation ---------------------------------------------------------------
+# use survey package to get direct estimates by admin1 and year, with SE
+direct <- list()
+for (y in unique(mod.dat$survey_year)) {
+  design <- svydesign(
+    ids = ~cluster,
+    weights = ~v005,
+    strata = ~strata,
+    data = mod.dat[mod.dat$survey_year == y,]
+  )
+  direct[[y]] <- svyby(~Y, ~admin1.name + years, design, svymean)
+  direct[[y]]$survey_year <- y
+}
+direct <- do.call(rbind, direct)
 
-# direct
-direct <- mod.dat %>%
+# light prep
+direct <- direct %>%
   mutate(year = as.numeric(as.character(years)),
-         admin1_name = admin1.name) %>%
-  group_by(admin1_name, admin1.char, year, survey_year) %>%
-  summarise(direct = sum(Y*v005)/sum(v005)) %>%
-  ungroup()
+         admin1_name = admin1.name)
 
 # combine with indirect and get MSE
-direct %>%
+outputMSE <- direct %>%
   left_join(results, by = c("admin1_name", "year")) %>%
   filter(year %in% hold_out_years) %>%
   group_by(time_model) %>%
-  summarise(mse = mean((direct - nmr)^2))
+  summarise(mse = mean((Y*1000 - nmr*1000)^2)) %>%
+  arrange(mse)
 
-# get CPO (log score)
+# combine with indirect and get mean error
+outputME <- direct %>%
+  left_join(results, by = c("admin1_name", "year")) %>%
+  filter(year %in% hold_out_years) %>%
+  group_by(time_model) %>%
+  summarise(me = mean(nmr*1000 - Y*1000)) %>%
+  arrange(me)
+
+# direct variance via delta method
+direct$V <- with(direct, (1/Y + 1/(1-Y))^2 * se^2)
+
+# get combined variance on logit scale
+resultsCPO <- results %>%
+  left_join(direct, by = c("admin1_name", "year")) %>%
+  filter(year %in% hold_out_years & !is.na(Y)) %>%
+  mutate(VarTot = V + logit_nmr_sd^2)
+
+# compute CPO
+resultsCPO$CPO_i <- 
+  with(resultsCPO,
+       -log(dnorm(x = SUMMER::logit(Y),
+                  mean = SUMMER::logit(nmr),
+                  sd = sqrt(VarTot))))
+
+# summarize
+outputCPO <- resultsCPO %>%
+  filter(!is.na(CPO_i) & is.finite(CPO_i)) %>%
+  group_by(time_model) %>%
+  summarise(CPO = mean(CPO_i)) %>%
+  arrange(CPO)
+
+# combine results
+output <- outputCPO %>%
+  left_join(outputMSE, by = "time_model") %>%
+  left_join(outputME, by = "time_model") %>%
+  arrange(CPO)
+
+# save
+saveRDS(output, paste0("Results/", country, "/validation_results.rds"))
 
 
 # plot -------------------------------------------------------------------
 
+results$time_model <- factor(
+  results$time_model,
+  levels = c("ar1", "rw1", "rw2", "ar1_iv", "rw1_iv", "rw2_iv")
+)
+
 pdf(paste0("Results/", country, "/timeplot_summary.pdf"), width = 11, height = 6)
-ggplot(results_all, aes(x = year, y = nmr * 1000, color = admin1_name, lty = admin1_name)) +
+ggplot(results, aes(x = year, y = nmr * 1000, color = admin1_name, lty = admin1_name)) +
   geom_line() +
   theme_bw() +
-  labs(x = "Year", y = "NMR", color = "Admin 1", lty = "Admin 1", title = "Liberia NMR") +
+  labs(x = "Year", y = "NMR", color = "Admin 1", lty = "Admin 1", title = paste0(country, " NMR")) +
   scale_linetype_manual(
     values = rep(c("solid", "dashed", "dotted", "dotdash", "longdash",
-                   "twodash", "F1"), 3)[1:length(unique(results_all$admin1_name))]) +
-  scale_x_continuous(breaks = seq(1990, 2025, 5), minor_breaks = seq(1990, 2025, 5)) +
+                   "twodash", "F1"), 3)[1:length(unique(results$admin1_name))]) +
+  scale_x_continuous(breaks = seq(2000, 2020, 5), minor_breaks = seq(2000, 2020, 5)) +
   facet_wrap("time_model")
 dev.off()
 
 pdf(paste0("Results/", country, "/timeplot_by_model.pdf"), width = 11, height = 10)
-for (tm in sort(unique(results_all$time_model))) {
-  gg <- results_all %>%
+for (tm in sort(unique(results$time_model))) {
+  gg <- results %>%
     filter(time_model == tm) %>%
     ggplot(aes(x = year, y = nmr * 1000)) +
     geom_ribbon(aes(ymin = nmr_lower * 1000, ymax = nmr_upper * 1000), alpha = 0.4) +
     geom_line() +
-    geom_point(data = direct, aes(y = direct * 1000, color = as.factor(survey_year))) +
+    geom_point(data = direct, aes(y = Y * 1000, color = as.factor(survey_year))) +
     theme_bw() +
-    labs(x = "Year", y = "NMR", title = paste0("Liberia NMR // ", tm), color = "Survey Year") +
-    scale_x_continuous(breaks = seq(1990, 2020, 5), minor_breaks = seq(1990, 2020, 5)) +
-    scale_y_continuous(limits = c(0, 150), breaks = seq(0, 150, 25)) +
+    labs(x = "Year", y = "NMR", title = paste0(country, " NMR // ", tm), color = "Survey Year") +
+    scale_x_continuous(breaks = seq(2000, 2020, 5), minor_breaks = seq(2000, 2020, 5)) +
     facet_wrap("admin1_name", ncol = 3) +
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
   print(gg)
 }
 dev.off()
 
-pdf(paste0("Results/", country, "/CIs-2019.pdf"))
-adm1_order <- direct %>%
-  filter(time_model == "rw2_iv" & year == 2019) %>%
-  arrange(nmr) %>%
-  dplyr::select(admin1_name)
-for (tm in sort(unique(results_all$time_model))) {
-  gg <- results_all %>%
-    filter(time_model == tm & year == 2019) %>%
-    arrange(nmr) %>%
-    mutate(admin1_name = factor(admin1_name, levels=adm1_order$admin1_name)) %>%
-    ggplot(aes(y = admin1_name)) +
-    geom_errorbarh(aes(xmin = nmr_lower * 1000, xmax=nmr_upper * 1000), height = 0.4) +
-    geom_point(aes(x = nmr * 1000)) +
-    geom_point(data = filter(direct, year >= 2015), aes(x = direct * 1000, y = admin1_name), color = "magenta") +
-    theme_bw() +
-    labs(x = "NMR", y = "", title = paste0("Liberia NMR 2019 // ", tm)) +
-    scale_x_continuous(limits = c(0, 80), breaks = seq(0, 80, 20), minor_breaks = seq(0, 80, 20))
-  print(gg)
-}
-dev.off()
-
-
-# Maps --------------------------------------------------------------------
-
-expit_medians$nmr1000 <- expit_medians$nmr * 1000
-expit_medians <- as.data.frame(expit_medians)
-
-expit_medians_subset <- 
-  expit_medians[expit_medians$year %in% seq(2000, 2020, 5),]
-
-pdf(paste0("Results/", country, "/map_adm1.pdf"))
-SUMMER::mapPlot(data = expit_medians_subset,
-                geo = poly_adm1,
-                variables = "year",
-                values = "nmr1000",
-                by.data = "admin1_name",
-                by.geo = "NAME_1",
-                legend.label = "NMR",
-                is.long = T)
-dev.off()
 
 
