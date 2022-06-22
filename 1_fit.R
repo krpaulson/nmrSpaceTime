@@ -19,7 +19,7 @@ list2env(settings, .GlobalEnv)
 years <- c(year_start_estimation:year_end_estimation)
 
 survey_meta <- readRDS(paste0("Data/", country, "/metadata.rds"))
-hold_out_year_start <- max(survey_meta$survey_year) - 3
+hold_out_year_start <- max(as.numeric(survey_meta$survey_year)) - 3
 hold_out_years <- c(hold_out_year_start:2020)
 # hold_out_area <- 1
 
@@ -80,7 +80,8 @@ binom_df <- binom_df %>%
   dplyr::right_join(all)  %>%
   mutate(ay = paste0(stringr::str_pad(admin1, 2, pad = "0"), "_", year),
          rural_indicator = ifelse(urban_indicator == 1, 0, 1),
-         survey_year = as.character(survey_year)) %>%
+         survey_year = as.character(survey_year),
+         year_copy = year) %>%
   as.data.frame()
 
 # create spacetime.unstruct variable which is numeric ay alphabetically
@@ -153,6 +154,7 @@ formulas[["rw1"]] <-
   f(survey_year, model = "iid", constr = TRUE) +                # random effect for survey year
   f(admin1, graph = fname, model = "bym2") +                    # bym2 space effect
   f(year, model = "rw1", constr = TRUE) +                       # rw1 time effect
+  f(year_copy, model = "iid") +
   f(spacetime.unstruct, model = "iid")
 
 formulas[["rw2"]] <- 
@@ -160,6 +162,7 @@ formulas[["rw2"]] <-
   f(survey_year, model = "iid", constr = TRUE) +                # random effect for survey year
   f(admin1, graph = fname, model = "bym2") +                    # bym2 space effect
   f(year, model = "rw2", constr = TRUE) +                       # rw2 time effect
+  f(year_copy, model = "iid") +
   f(spacetime.unstruct, model = "iid")
 
 formulas[["ar1"]] <- 
@@ -174,6 +177,7 @@ formulas[["rw1_iv"]] <-
   f(survey_year, model = "iid", constr = TRUE) +                # random effect for survey year
   f(admin1, graph = fname, model = "bym2") +                    # bym2 space effect
   f(year, model = "rw1", constr = TRUE) +                       # rw2 time effect
+  f(year_copy, model = "iid") +
   f(spacetime.unstruct,
     model = "generic0",
     Cmatrix = R,
@@ -185,6 +189,7 @@ formulas[["rw2_iv"]] <-
   f(survey_year, model = "iid", constr = TRUE) +                # random effect for survey year
   f(admin1, graph = fname, model = "bym2") +                    # bym2 space effect
   f(year, model = "rw2", constr = TRUE) +                       # rw2 time effect
+  f(year_copy, model = "iid") +
   f(spacetime.unstruct,
     model = "generic0",
     Cmatrix = R,
@@ -245,7 +250,8 @@ for (hold_out_area in 1:length(unique(binom_df$admin1))) {
     # only take the first half of the region id's since the bym2 returns c(total, spatial)
     region_idx <- which(rownames(samp[[1]]$latent) %>%
                           str_detect("admin1"))[1:length(unique(binom_df$admin1))]
-    yearx <- which(rownames(samp[[1]]$latent) %>% str_detect("^year"))
+    yearx <- which(rownames(samp[[1]]$latent) %>% str_detect("^year:"))
+    if (time_model %like% "rw") yearx_iid <- which(rownames(samp[[1]]$latent) %>% str_detect("^year_copy"))
     ayx <- which(rownames(samp[[1]]$latent) %>% str_detect("spacetime.unstruct")) # interaction
     
     # urban intercept
@@ -254,6 +260,7 @@ for (hold_out_area in 1:length(unique(binom_df$admin1))) {
     
     region_mat <- matrix(0, nrow = length(region_idx), ncol = nsamp)
     year_mat <- matrix(0, nrow = length(yearx), ncol = nsamp)
+    if (time_model %like% "rw") year_iid_mat <- matrix(0, nrow = length(yearx_iid), ncol = nsamp)
     ay_mat <- matrix(0, nrow = length(ayx), ncol = nsamp)
     urban_mat <- matrix(0, nrow = 1, ncol = nsamp)
     rural_mat <- matrix(0, nrow = 1, ncol = nsamp)
@@ -262,6 +269,7 @@ for (hold_out_area in 1:length(unique(binom_df$admin1))) {
     for (i in 1:nsamp) {
       region_mat[,i] <- samp[[i]]$latent[region_idx]
       year_mat[,i] <- samp[[i]]$latent[yearx]
+      if (time_model %like% "rw") year_iid_mat[,i] <- samp[[i]]$latent[yearx_iid]
       ay_mat[,i] <- samp[[i]]$latent[ayx]
       urban_mat[,i] <- samp[[i]]$latent[urbanx]
       rural_mat[,i] <- samp[[i]]$latent[ruralx]
@@ -283,6 +291,12 @@ for (hold_out_area in 1:length(unique(binom_df$admin1))) {
       region_mat[st_df$region,] +         # space effect
       year_mat[st_df$time,] +             # time effect
       ay_mat                              # space-time interaction
+    
+    # iid time effect
+    if (time_model %like% "rw") {
+      samp_mat_urban <- samp_mat_urban + year_iid_mat[st_df$time,]
+      samp_mat_rural <- samp_mat_rural + year_iid_mat[st_df$time,]
+    }
     
     # now expit all of our samples to get back to p
     expit_samp_mat_urban <- SUMMER::expit(samp_mat_urban)
