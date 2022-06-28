@@ -7,6 +7,9 @@ library(SUMMER)
 library(survey)
 library(RColorBrewer)
 
+# https://r-survey.r-forge.r-project.org/survey/exmample-lonely.html
+options(survey.lonely.psu="remove")
+
 
 # settings ----------------------------------------------------------------
 
@@ -124,12 +127,13 @@ ggplot(results, aes(x = year, y = nmr * 1000, color = admin1_name, lty = admin1_
   labs(x = "Year", y = "NMR", color = "Admin 1", lty = "Admin 1", title = paste0(country, " NMR")) +
   scale_linetype_manual(
     values = rep(c("solid", "dashed", "dotted", "dotdash", "longdash",
-                   "twodash", "F1"), 3)[1:length(unique(results$admin1_name))]) +
+                   "twodash", "F1"), 10)[1:length(unique(results$admin1_name))]) +
   scale_x_continuous(breaks = seq(2000, 2020, 5), minor_breaks = seq(2000, 2020, 5)) +
   facet_wrap("time_model")
 dev.off()
 
-pdf(paste0("Results/", country, "/timeplot_by_model.pdf"), width = 11, height = 10)
+pdf(paste0("Results/", country, "/timeplot_by_model.pdf"),
+    width = 11, height = length(unique(results$admin1_name)))
 for (tm in sort(unique(results$time_model))) {
   gg <- results %>%
     filter(time_model == tm) %>%
@@ -141,6 +145,24 @@ for (tm in sort(unique(results$time_model))) {
     labs(x = "Year", y = "NMR", title = paste0(country, " NMR // ", tm), color = "Survey Year") +
     scale_x_continuous(breaks = seq(2000, 2020, 5), minor_breaks = seq(2000, 2020, 5)) +
     facet_wrap("admin1_name", ncol = 3) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  print(gg)
+}
+dev.off()
+
+pdf(paste0("Results/", country, "/timeplot_by_admin1.pdf"), width = 11, height = 7)
+for (adm1 in sort(unique(results$admin1_name))) {
+  gg <- results %>%
+    filter(admin1_name == adm1) %>%
+    ggplot(aes(x = year, y = nmr * 1000)) +
+    geom_ribbon(aes(ymin = nmr_lower * 1000, ymax = nmr_upper * 1000), alpha = 0.4) +
+    geom_line() +
+    geom_point(data = direct[direct$admin1.name == adm1,],
+               aes(y = Y * 1000, color = as.factor(survey_year))) +
+    theme_bw() +
+    labs(x = "Year", y = "NMR", title = paste0(country, " NMR // ", adm1), color = "Survey Year") +
+    scale_x_continuous(breaks = seq(2000, 2020, 5), minor_breaks = seq(2000, 2020, 5)) +
+    facet_wrap("time_model", ncol = 3) +
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
   print(gg)
 }
