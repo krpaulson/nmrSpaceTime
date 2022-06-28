@@ -67,17 +67,19 @@ direct <- direct %>%
 # combine with indirect and get MSE
 outputMSE <- direct %>%
   left_join(results, by = c("admin1_name", "year")) %>%
-  filter(year %in% hold_out_years) %>%
+  filter(year %in% hold_out_years & se > 0) %>%
   group_by(time_model) %>%
-  summarise(mse = mean((Y*1000 - nmr*1000)^2)) %>%
+  mutate(w = 1/se^2) %>%
+  summarise(mse = sum(w*(Y*1000 - nmr*1000)^2)/sum(w))
   arrange(mse)
 
 # combine with indirect and get mean error
 outputME <- direct %>%
   left_join(results, by = c("admin1_name", "year")) %>%
-  filter(year %in% hold_out_years) %>%
+  filter(year %in% hold_out_years & se > 0) %>%
   group_by(time_model) %>%
-  summarise(me = mean(nmr*1000 - Y*1000)) %>%
+  mutate(w = 1/se^2) %>%
+  summarise(me = sum(w*(nmr*1000 - Y*1000))/sum(w)) %>%
   arrange(me)
 
 # direct variance via delta method
@@ -121,7 +123,7 @@ results$time_model <- factor(
 )
 
 pdf(paste0("Results/", country, "/timeplot_summary.pdf"), width = 11, height = 6)
-ggplot(results, aes(x = year, y = nmr * 1000, color = admin1_name, lty = admin1_name)) +
+gg <- ggplot(results, aes(x = year, y = nmr * 1000, color = admin1_name, lty = admin1_name)) +
   geom_line() +
   theme_bw() +
   labs(x = "Year", y = "NMR", color = "Admin 1", lty = "Admin 1", title = paste0(country, " NMR")) +
@@ -130,6 +132,7 @@ ggplot(results, aes(x = year, y = nmr * 1000, color = admin1_name, lty = admin1_
                    "twodash", "F1"), 10)[1:length(unique(results$admin1_name))]) +
   scale_x_continuous(breaks = seq(2000, 2020, 5), minor_breaks = seq(2000, 2020, 5)) +
   facet_wrap("time_model")
+print(gg)
 dev.off()
 
 pdf(paste0("Results/", country, "/timeplot_by_model.pdf"),
