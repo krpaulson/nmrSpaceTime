@@ -207,6 +207,18 @@ formulas[["ar1_iv"]] <-
     extraconstr = constr.st,
     rankdef = nrow(icar_prec) + S - 1)
 
+# if only one survey, remove survey effect
+if (length(unique(binom_df$survey_year)) > 1) {
+  survey_effect <- T
+} else {
+  survey_effect <- F
+  for (tm in time_model_list) {
+    tt <- terms(formulas[[tm]])
+    survey_index <- which(attr(tt, "term.labels") %>% str_detect("survey"))
+    tt <- drop.terms(tt, survey_index)
+    formulas[[tm]] <- reformulate(attr(tt, "term.labels"), response = "Y", intercept = F)
+  }
+}
 
 for (hold_out_area in 1:length(unique(binom_df$admin1))) {
   print(hold_out_area)
