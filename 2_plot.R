@@ -70,7 +70,7 @@ outputMSE <- direct %>%
   filter(year %in% hold_out_years & se > 0) %>%
   group_by(time_model) %>%
   mutate(w = 1/se^2) %>%
-  summarise(mse = sum(w*(Y*1000 - nmr*1000)^2)/sum(w))
+  summarise(mse = sum(w*(Y*1000 - nmr*1000)^2)/sum(w)) %>%
   arrange(mse)
 
 # combine with indirect and get mean error
