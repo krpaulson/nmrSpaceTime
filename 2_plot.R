@@ -172,4 +172,82 @@ for (adm1 in sort(unique(results$admin1_name))) {
 dev.off()
 
 
+# national aggregation ----------------------------------------------------
 
+# compare aggregated results to direct weighted national estimate & to UN-IGME results
+
+pop <- readRDS(paste0("Data/", country, "/Population/admin1_u1_pop.rds"))
+
+if (length(setdiff(unique(results$admin1_name), unique(pop$admin1_name))) > 0) {
+  warning("Not all admin1 in results have pop")
+}
+
+resultsNat <- results %>%
+  left_join(pop, by = c("admin1_name", "year")) %>%
+  group_by(time_model, year) %>%
+  summarise(nmr = 1000 * sum(nmr * population) / sum(population),
+            nmr_lower = 1000 * sum(nmr_lower * population) / sum(population),
+            nmr_upper = 1000 * sum(nmr_upper * population) / sum(population))
+
+# direct national results
+directNat <- list()
+for (y in unique(mod.dat$survey_year)) {
+  design <- svydesign(
+    ids = ~cluster,
+    weights = ~v005,
+    strata = ~strata,
+    data = mod.dat[mod.dat$survey_year == y,]
+  )
+  est <- svyby(~Y, ~years, design, svymean)
+  directNat[[y]] <- data.frame(
+    nmr = 1000 * as.numeric(est$Y),
+    nmr_lower = 1000 * confint(est)[,1],
+    nmr_upper = 1000 * confint(est)[,2],
+    year = est$years,
+    survey_year = y
+  )
+}
+directNat <- do.call(rbind, directNat)
+directNat <- directNat %>%
+  mutate(year = as.numeric(as.character(year)))
+
+# UN-IGME national results (B3)
+if (!file.exists("Data/UNIGME-2021.csv")) {
+  download.file("https://childmortality.org/wp-content/uploads/2021/09/UNIGME-2021.csv",
+                destfile = "Data/UNIGME-2021.csv")
+}
+unigme <- read_csv("Data/UNIGME-2021.csv")
+unigme <- unigme %>%
+  filter(`Geographic area` == country &
+         `Series Name` == "UN IGME estimate" &
+         Indicator == "Neonatal mortality rate" &
+         Sex == "Total") %>%
+  dplyr::select(year = REF_DATE, nmr = OBS_VALUE,
+                nmr_lower = LOWER_BOUND,
+                nmr_upper = UPPER_BOUND) %>%
+  mutate(year = as.integer(floor(year)))
+
+# plot
+colors <- brewer.pal(n = 9, name = "Set1")
+color_pal <- c("UN-IGME" = colors[4], "New Model" = colors[3])
+add_colors <- colors[c(1,2,5,7,9)][1:length(unique(directNat$survey_year))]
+names(add_colors) <- paste0("DHS ", unique(directNat$survey_year))
+color_pal <- c(color_pal, add_colors)
+color_pal <- color_pal[!names(color_pal) == "DHS NA"]
+
+pdf(paste0("Results/", country, "/aggregated_national.pdf"), width = 11, height = 6)
+gg <- ggplot(data = resultsNat) +
+  geom_line(aes(x = year, y = nmr, color = "New Model")) +
+  geom_ribbon(aes(x = year, ymin = nmr_lower, ymax = nmr_upper, fill = "New Model"), alpha = 0.3) +
+  geom_line(data = unigme, aes(x = year, y = nmr, color = "UN-IGME")) +
+  geom_ribbon(data = unigme, aes(x = year, ymin = nmr_lower, ymax = nmr_upper, fill = "UNIGME"), alpha = 0.3) +
+  geom_point(data = directNat, aes(x = year, y = nmr, color = paste0("DHS ", survey_year))) +
+  theme_bw() +
+  scale_fill_manual(values = color_pal) +
+  scale_color_manual(values = color_pal) +
+  scale_x_continuous(limits = c(year_start_estimation, year_end_estimation)) +
+  facet_wrap("time_model") +
+  labs(color = "Model", fill = "Model", x = "Year", y = "NMR",
+       title = paste0(country, " // Aggregated Admin 1 to National NMR"))
+print(gg)
+dev.off()
