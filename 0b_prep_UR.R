@@ -30,6 +30,8 @@ library(gstat)
 library(stringdist)
 library(openxlsx)
 
+set.seed(1425)
+
 # settings
 settings <- yaml::read_yaml("run_settings.yaml")
 list2env(settings, .GlobalEnv)
@@ -148,7 +150,6 @@ constr_prior <- function(obs,jitter_r,prob_r,poly_admin,pop_ras){
   temp_pop_admin<-mask(crop(temp_pop_cir,admin1_poly),
                        admin1_poly)
   
-  
   # check whether need to adjust for constraint 
   cir_val<-values(temp_pop_cir)
   admin_val<-values(temp_pop_admin)
@@ -265,7 +266,7 @@ uncrc_dat_final<-uncrc_dat[,col_select]
 
 pop.year <- beg.year:end.year
 
-options(timeout = 1000) # adjust this time, should be longer than each download
+options(timeout = 4000) # adjust this time, should be longer than each download
 for(year in pop.year){ #pop.year <- beg.year:end.year   ## population surface year
   print(year)
   for(age in c(0)){
@@ -583,4 +584,47 @@ saveRDS(adm1.weight.frame,paste0('Results/', country, '/admin1_urban_weights.rds
 saveRDS(adm2.weight.frame,paste0('Results/', country, '/admin2_urban_weights.rds'))
 
 
+
+# admin 1 weights ---------------------------------------------------------
+
+# get u1 population in each admin 1 to get weights for aggregation to national NMR
+# note: modify to live births instead of u1 pop for production
+
+# Based on code here:
+# https://github.com/wu-thomas/SUMMER-DHS/blob/main/Rcode/Visualization/compare_report.R
+
+admin1_pop <- list()
+for(year in year_start_estimation:year_end_estimation) {
+  print(year)
+  
+  pop_u1 <- raster(paste0("Data/", country, "/Population/",
+                          tolower(country_code), "_u1_", year, "_100m.tif"))
+  
+  # make sure polygons have same crs as population raster
+  adm1.shp <- spTransform(poly.adm1, pop_u1@crs)
+  
+  # admin 1 level population
+  wp.adm1.list <- lapply(1:nrow(adm1.shp), function(x) {
+    list(state_id = x,
+         state_raster = mask(crop(pop_u1, adm1.shp[x,]),
+                             adm1.shp[x,]))
+  })
+  
+  # store total population at admin 1
+  pop.adm1 <- vector()
+  for ( j in 1:nrow(adm1.shp)) {
+    pop_j <- wp.adm1.list[[j]]
+    pop.adm1[j] <- sum(values(pop_j$state_raster), na.rm = TRUE)
+  }
+  admin_pop_dat <- data.frame(
+    admin1_name = poly.adm1@data$NAME_1,
+    population = pop.adm1,
+    year = year
+  )
+  admin1_pop[[year]] <- admin_pop_dat
+}
+admin1_pop_df <- do.call(rbind, admin1_pop)
+
+# save
+saveRDS(admin1_pop_df, file = paste0("Data/", country, "/Population/admin1_u1_pop.rds"))
 
