@@ -2,10 +2,10 @@
 # Prep inputs
 
 library(rdhs)
-library(tidyverse)
 library(SUMMER)
 library(spdep)
 library(geosphere)
+library(tidyverse)
 
 source("helperFunctions.R")
 
