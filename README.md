@@ -29,7 +29,10 @@ rdhs::set_rdhs_config(
 
 6.  Create the folder `nmrSpaceTime/Data/{country}`
 
-7.  Create Admin 1 urban fraction file (`frame_urb_prop.csv` with columns "region" and "urban_prop"; following details here: <https://github.com/wu-thomas/SUMMER-DHS/tree/main/Vignette/Urban%20Fraction>) and put it in the country data folder.
+7.  Create the folder `nmrSpaceTime/Results/{country}`
+
+8.  Create Admin 1 urban fraction file (`frame_urb_prop.csv` with columns "region" and "urban_prop"; following details here: <https://github.com/wu-thomas/SUMMER-DHS/tree/main/Vignette/Urban%20Fraction>) and put it in the country data folder.
+
 
 # Running the code
 
@@ -39,3 +42,5 @@ Run the following scripts in order. No specific modifications should be required
 -   `0b_prep_UR.R`
 -   `1_fit.R`
 -   `2_plot.R`
+
+After running the `1_fit.R`, run `main(10, time_model_list, binom_df, hold_out_years, formulas, results)` in Rstudio Console. 

@@ -7,6 +7,7 @@ library(magrittr)
 library(spdep)
 library(stringr)
 library(openxlsx)
+library(data.table)
 
 set.seed(1528)
 
@@ -220,10 +221,10 @@ if (length(unique(binom_df$survey_year)) > 1) {
   }
 }
 
-for (hold_out_area in 1:length(unique(binom_df$admin1))) {
-  print(hold_out_area)
-
-  # apply holdouts for validation
+"fit_diff_model" = function(hold_out_area, time_model_list, binom_df, hold_out_years, formulas, results) {
+  require(INLA)
+  source("1_fit.R")
+  # print(hold_out_area)
   binom_df_holdouts <- binom_df
   binom_df_holdouts[binom_df_holdouts$year %in% hold_out_years |
                       binom_df_holdouts$admin1 %in% hold_out_area, ]$Y <- NA
@@ -343,5 +344,39 @@ for (hold_out_area in 1:length(unique(binom_df$admin1))) {
   expit_medians <- expit_medians %>% filter(admin1_name == hold_out_area_name)
   
   saveRDS(expit_medians, paste0("Results/", country, "/results_holdout_", hold_out_area, ".rds"))
-
+  return(0)
 }
+
+
+main <- function(clusterSize, time_model_list, binom_df, hold_out_years, formulas, results)
+{
+  # getDoParWorkers()
+  # getDoParName()
+  # registerDoSNOW(makeCluster(clusterSize, type = "SOCK"))
+  # getDoParWorkers()
+  # getDoParName()
+  # ncores <- detectCores() - 1
+  # registerDoParallel(cores = ncores)
+  cluster <- makeCluster(clusterSize, type = "SOCK")
+  
+  # results = foreach(hold_out_area = 1:length(unique(binom_df$admin1)),.export="fit_diff_model") %dopar% {
+  #   fit_diff_model(hold_out_area, time_model_list, binom_df, hold_out_years, formulas, results)
+  # }
+  for (i in 1:length(unique(binom_df$admin1))) {
+    print(i)
+    start.time <- Sys.time()
+    results = clusterApply(cluster, i, fit_diff_model,
+                           time_model_list,binom_df,hold_out_years, formulas, results)
+    end.time <- Sys.time()
+    time.taken <- end.time - start.time
+    print(time.taken)
+  }
+  
+  
+  stopCluster(cluster);  
+}
+
+require(snow)
+
+
+
