@@ -266,7 +266,7 @@ uncrc_dat_final<-uncrc_dat[,col_select]
 
 pop.year <- beg.year:end.year
 
-options(timeout = 4000) # adjust this time, should be longer than each download
+options(timeout = 5000) # adjust this time, should be longer than each download
 for(year in pop.year){ #pop.year <- beg.year:end.year   ## population surface year
   print(year)
   for(age in c(0)){
@@ -289,6 +289,11 @@ for ( t in 1:length(years)){
   
   year <- years[t]
   print(year)
+  
+  if (file.exists(paste0("Data/", country, "/Population/",
+                         pop.abbrev,'_u1_',year,'_100m','.tif'))) {
+    next()
+  }
   
   ## first sum up four rasters female 0-1, male 0-1
   f_0_name = paste0("Data/", country, "/Population/", pop.abbrev,'_f_0_',year,'.tif')
