@@ -18,9 +18,9 @@ list2env(settings, .GlobalEnv)
 
 years <- c(year_start_estimation:year_end_estimation)
 
-survey_meta <- readRDS(paste0("Data/", country, "/metadata.rds"))
-hold_out_year_start <- max(as.numeric(survey_meta$survey_year)) - 3
-hold_out_years <- c(hold_out_year_start:2020)
+# survey_meta <- readRDS(paste0("Data/", country, "/metadata.rds"))
+# hold_out_year_start <- max(as.numeric(survey_meta$survey_year)) - 3
+# hold_out_years <- c(hold_out_year_start:2020)
 
 
 # setup -------------------------------------------------------------------
@@ -35,10 +35,20 @@ poly_adm1 <- rgdal::readOGR(dsn = dsn, layer = layer)
 # load data
 mod.dat <- readRDS(paste0("Data/", country, "/nmr_data_prepped.rds"))
 
-# load results
+# # load results
+# files_ar1 <- list.files(
+#   paste0("Results/", country),
+#   pattern = "results_holdout_.*-ar1.rds",
+#   full.names = T
+# )
+# files <- gsub("-ar1", "", files_ar1)
+# results_ar1 <- files_ar1 %>% map_dfr(readRDS)
+# results <- files %>% map_dfr(readRDS)
+# results_ar1$time_model <- paste0(results_ar1$time_model, "_linear")
+# results <- rbind(results, results_ar1)
 results <- list.files(
   paste0("Results/", country),
-  pattern = "results_holdout_",
+  pattern = "-all-yrs.rds",
   full.names = T
 ) %>% map_dfr(readRDS)
 
@@ -67,7 +77,7 @@ direct <- direct %>%
 # combine with indirect and get MSE
 outputMSE <- direct %>%
   left_join(results, by = c("admin1_name", "year")) %>%
-  filter(year %in% hold_out_years & se > 0) %>%
+  filter(se>0) %>% #filter(year %in% hold_out_years & se > 0) %>%
   group_by(time_model) %>%
   mutate(w = 1/se^2) %>%
   summarise(mse = sum(w*(Y*1000 - nmr*1000)^2)/sum(w)) %>%
@@ -76,7 +86,7 @@ outputMSE <- direct %>%
 # combine with indirect and get mean error
 outputME <- direct %>%
   left_join(results, by = c("admin1_name", "year")) %>%
-  filter(year %in% hold_out_years & se > 0) %>%
+  filter(se > 0) %>% #year %in% hold_out_years & se > 0) %>%
   group_by(time_model) %>%
   mutate(w = 1/se^2) %>%
   summarise(me = sum(w*(nmr*1000 - Y*1000))/sum(w)) %>%
@@ -88,7 +98,7 @@ direct$V <- with(direct, (1/Y + 1/(1-Y))^2 * se^2)
 # get combined variance on logit scale
 resultsCPO <- results %>%
   left_join(direct, by = c("admin1_name", "year")) %>%
-  filter(year %in% hold_out_years & !is.na(Y)) %>%
+  filter(!is.na(Y)) %>% #filter(year %in% hold_out_years & !is.na(Y)) %>%
   mutate(VarTot = V + logit_nmr_sd^2)
 
 # compute CPO
@@ -112,18 +122,21 @@ output <- outputCPO %>%
   arrange(CPO)
 
 # save
-saveRDS(output, paste0("Results/", country, "/validation_results.rds"))
+#saveRDS(output, paste0("Results/", country, "/validation_results-ar1.rds"))
 
 
 # plot -------------------------------------------------------------------
 
 results$time_model <- factor(
   results$time_model,
-  levels = c("ar1", "rw1", "rw2", "ar1_iv", "rw1_iv", "rw2_iv")
+  levels = c("ar1", "ar1_linear", "rw1", "rw2",
+             "ar1_iv", "ar1_iv_linear", "rw1_iv", "rw2_iv")
 )
 
-pdf(paste0("Results/", country, "/timeplot_summary.pdf"), width = 11, height = 6)
-gg <- ggplot(results, aes(x = year, y = nmr * 1000, color = admin1_name, lty = admin1_name)) +
+pdf(paste0("Results/", country, "/timeplot_summary-new.pdf"), width = 11, height = 6)
+gg <- results %>%
+  filter(str_detect(time_model, "_iv")) %>%
+  ggplot(aes(x = year, y = nmr * 1000, color = admin1_name, lty = admin1_name)) +
   geom_line() +
   theme_bw() +
   labs(x = "Year", y = "NMR", color = "Admin 1", lty = "Admin 1", title = paste0(country, " NMR")) +
@@ -153,10 +166,10 @@ for (tm in sort(unique(results$time_model))) {
 }
 dev.off()
 
-pdf(paste0("Results/", country, "/timeplot_by_admin1.pdf"), width = 11, height = 7)
+pdf(paste0("Results/", country, "/timeplot_by_admin1-new.pdf"), width = 11, height = 7)
 for (adm1 in sort(unique(results$admin1_name))) {
   gg <- results %>%
-    filter(admin1_name == adm1) %>%
+    filter(admin1_name == adm1 & str_detect(time_model, "_iv")) %>%
     ggplot(aes(x = year, y = nmr * 1000)) +
     geom_ribbon(aes(ymin = nmr_lower * 1000, ymax = nmr_upper * 1000), alpha = 0.4) +
     geom_line() +
@@ -165,7 +178,7 @@ for (adm1 in sort(unique(results$admin1_name))) {
     theme_bw() +
     labs(x = "Year", y = "NMR", title = paste0(country, " NMR // ", adm1), color = "Survey Year") +
     scale_x_continuous(breaks = seq(2000, 2020, 5), minor_breaks = seq(2000, 2020, 5)) +
-    facet_wrap("time_model", ncol = 3) +
+    facet_wrap("time_model", ncol = 2) +
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
   print(gg)
 }
@@ -235,8 +248,10 @@ names(add_colors) <- paste0("DHS ", unique(directNat$survey_year))
 color_pal <- c(color_pal, add_colors)
 color_pal <- color_pal[!names(color_pal) == "DHS NA"]
 
-pdf(paste0("Results/", country, "/aggregated_national.pdf"), width = 11, height = 6)
-gg <- ggplot(data = resultsNat) +
+pdf(paste0("Results/", country, "/aggregated_national-new.pdf"), width = 11, height = 6)
+gg <- resultsNat %>%
+  filter(str_detect(time_model, "_iv")) %>%
+  ggplot() +
   geom_line(aes(x = year, y = nmr, color = "New Model")) +
   geom_ribbon(aes(x = year, ymin = nmr_lower, ymax = nmr_upper, fill = "New Model"), alpha = 0.3) +
   geom_line(data = unigme, aes(x = year, y = nmr, color = "UN-IGME")) +
@@ -246,6 +261,7 @@ gg <- ggplot(data = resultsNat) +
   scale_fill_manual(values = color_pal) +
   scale_color_manual(values = color_pal) +
   scale_x_continuous(limits = c(year_start_estimation, year_end_estimation)) +
+  scale_y_continuous(limits = c(0, 80), breaks = seq(0, 80, 20)) +
   facet_wrap("time_model") +
   labs(color = "Model", fill = "Model", x = "Year", y = "NMR",
        title = paste0(country, " // Aggregated Admin 1 to National NMR"))

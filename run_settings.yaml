@@ -7,10 +7,10 @@ year_end_estimation: 2020
 
 # country-specific settings
 
-country: Zambia
-country_code: ZMB
-gadmFolder: gadm40_ZMB  # https://gadm.org/download_country.html
+country: Liberia
+country_code: LBR
+gadmFolder: gadm40_LBR  # https://gadm.org/download_country.html
 # first year's survey to include for this country,
 # so that we only use 1 sampling frame
-year_start_survey: 2013
-frame_year: 2010
+year_start_survey: 2009
+frame_year: 2008
