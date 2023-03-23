@@ -18,9 +18,9 @@ list2env(settings, .GlobalEnv)
 
 years <- c(year_start_estimation:year_end_estimation)
 
-survey_meta <- readRDS(paste0("Data/", country, "/metadata.rds"))
-hold_out_year_start <- max(as.numeric(survey_meta$survey_year)) - 3
-hold_out_years <- c(hold_out_year_start:2020)
+# survey_meta <- readRDS(paste0("Data/", country, "/metadata.rds"))
+# hold_out_year_start <- max(as.numeric(survey_meta$survey_year)) - 3
+# hold_out_years <- c(hold_out_year_start:2020)
 # hold_out_area <- 1
 
 
@@ -81,7 +81,7 @@ binom_df <- binom_df %>%
   mutate(ay = paste0(stringr::str_pad(admin1, 2, pad = "0"), "_", year),
          rural_indicator = ifelse(urban_indicator == 1, 0, 1),
          survey_year = as.character(survey_year),
-         year_copy = year) %>%
+         year_copy = year - min(year) + 1) %>%
   as.data.frame()
 
 # create spacetime.unstruct variable which is numeric ay alphabetically
@@ -146,8 +146,9 @@ R <- inla.scale.model(R, constr = constr.st)
 
 formulas <- list()
 results <- list()
-time_model_list <- c("rw1", "rw2", "ar1",
-                     "rw1_iv", "rw2_iv", "ar1_iv")
+# time_model_list <- c("rw1", "rw2", "ar1",
+#                      "rw1_iv", "rw2_iv", "ar1_iv")
+time_model_list <- c("ar1_iv", "rw1_iv", "rw2_iv")
 
 formulas[["rw1"]] <- 
   Y ~ urban_indicator + rural_indicator - 1 +                   # urban/rural intercept
@@ -170,6 +171,7 @@ formulas[["ar1"]] <-
   f(survey_year, model = "iid", constr = TRUE) +                # random effect for survey year
   f(admin1, graph = fname, model = "bym2") +                    # bym2 space effect
   f(year, model = "ar1") +                                      # ar1 time effect
+  year_copy +                                                   # linear time effect
   f(spacetime.unstruct, model = "iid")
 
 formulas[["rw1_iv"]] <- 
@@ -201,6 +203,7 @@ formulas[["ar1_iv"]] <-
   f(survey_year, model = "iid", constr = TRUE) +                # random effect for survey year
   f(admin1, graph = fname, model = "bym2") +                    # bym2 space effect
   f(year, model = "ar1") +                                      # rw2 time effect
+  year_copy +                                                   # linear time effect
   f(spacetime.unstruct,
     model = "generic0",
     Cmatrix = R,
@@ -225,8 +228,8 @@ for (hold_out_area in 1:length(unique(binom_df$admin1))) {
 
   # apply holdouts for validation
   binom_df_holdouts <- binom_df
-  binom_df_holdouts[binom_df_holdouts$year %in% hold_out_years |
-                      binom_df_holdouts$admin1 %in% hold_out_area, ]$Y <- NA
+  #binom_df_holdouts[binom_df_holdouts$year %in% hold_out_years |
+  #                    binom_df_holdouts$admin1 %in% hold_out_area, ]$Y <- NA
   
   # fit all models
   for (time_model in time_model_list) {
@@ -263,7 +266,7 @@ for (hold_out_area in 1:length(unique(binom_df$admin1))) {
     region_idx <- which(rownames(samp[[1]]$latent) %>%
                           str_detect("admin1"))[1:length(unique(binom_df$admin1))]
     yearx <- which(rownames(samp[[1]]$latent) %>% str_detect("^year:"))
-    if (time_model %like% "rw") yearx_iid <- which(rownames(samp[[1]]$latent) %>% str_detect("^year_copy"))
+    yearx_iid <- which(rownames(samp[[1]]$latent) %>% str_detect("^year_copy")) # iid if rw, linear if ar1
     ayx <- which(rownames(samp[[1]]$latent) %>% str_detect("spacetime.unstruct")) # interaction
     
     # urban intercept
@@ -272,7 +275,7 @@ for (hold_out_area in 1:length(unique(binom_df$admin1))) {
     
     region_mat <- matrix(0, nrow = length(region_idx), ncol = nsamp)
     year_mat <- matrix(0, nrow = length(yearx), ncol = nsamp)
-    if (time_model %like% "rw") year_iid_mat <- matrix(0, nrow = length(yearx_iid), ncol = nsamp)
+    year_iid_mat <- matrix(0, nrow = length(yearx_iid), ncol = nsamp)
     ay_mat <- matrix(0, nrow = length(ayx), ncol = nsamp)
     urban_mat <- matrix(0, nrow = 1, ncol = nsamp)
     rural_mat <- matrix(0, nrow = 1, ncol = nsamp)
@@ -281,7 +284,7 @@ for (hold_out_area in 1:length(unique(binom_df$admin1))) {
     for (i in 1:nsamp) {
       region_mat[,i] <- samp[[i]]$latent[region_idx]
       year_mat[,i] <- samp[[i]]$latent[yearx]
-      if (time_model %like% "rw") year_iid_mat[,i] <- samp[[i]]$latent[yearx_iid]
+      year_iid_mat[,i] <- samp[[i]]$latent[yearx_iid]
       ay_mat[,i] <- samp[[i]]$latent[ayx]
       urban_mat[,i] <- samp[[i]]$latent[urbanx]
       rural_mat[,i] <- samp[[i]]$latent[ruralx]
@@ -305,9 +308,16 @@ for (hold_out_area in 1:length(unique(binom_df$admin1))) {
       ay_mat                              # space-time interaction
     
     # iid time effect
-    if (time_model %like% "rw") {
+    if (str_detect(time_model, "rw")) {
       samp_mat_urban <- samp_mat_urban + year_iid_mat[st_df$time,]
       samp_mat_rural <- samp_mat_rural + year_iid_mat[st_df$time,]
+    }
+    # linear time effect
+    if (str_detect(time_model, "ar1")) {
+      samp_mat_urban <- samp_mat_urban +
+        outer(st_df$time, as.vector(year_iid_mat))
+      samp_mat_rural <- samp_mat_rural +
+        outer(st_df$time, as.vector(year_iid_mat))
     }
     
     # now expit all of our samples to get back to p
@@ -342,6 +352,6 @@ for (hold_out_area in 1:length(unique(binom_df$admin1))) {
   hold_out_area_name <- sort(unique(binom_df$admin1.name))[hold_out_area]
   expit_medians <- expit_medians %>% filter(admin1_name == hold_out_area_name)
   
-  saveRDS(expit_medians, paste0("Results/", country, "/results_holdout_", hold_out_area, ".rds"))
+  saveRDS(expit_medians, paste0("Results/", country, "/results_holdout_", hold_out_area, "-all-yrs.rds"))
 
 }
